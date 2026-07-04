@@ -1,0 +1,734 @@
+// globall data
+
+global_slipperiness = {};
+global_boosters = {};
+global_jump_pads = {};
+global_bouncy_walls = {};
+
+global_min_x = 0;
+global_max_x = 0;
+global_min_y = 0;
+global_max_y = 0;
+global_min_z = 0;
+global_max_z = 0;
+global_has_bounds = false;
+
+global_history = [];
+global_file_name = 'boatutils_config';
+
+HISTORY_LIMIT = 20;
+
+
+// commands
+
+__config() -> {
+    'commands' -> {
+        '' -> 'show_help',
+
+        'bounds <x1> <y1> <z1> <x2> <y2> <z2>' -> 'cmd_bounds',
+
+        'slipperiness <block> <multiplier>' ->
+            'cmd_slipperiness',
+
+        'slippery <block> <preset>' ->
+            'cmd_slippery_preset',
+
+        'booster <block> <force>' ->
+            'cmd_booster',
+
+        'jumppad <block> <force>' ->
+            'cmd_jumppad',
+
+        'bouncywall <block> <elasticity>' ->
+            'cmd_bouncywall',
+
+        'undo' -> 'cmd_undo',
+        'save' -> 'cmd_save',
+        'load' -> 'cmd_load'
+    },
+
+    'arguments' -> {
+
+        'block' -> {
+            'type' -> 'block'
+        },
+
+        'multiplier' -> {
+            'type' -> 'float'
+        },
+
+        'force' -> {
+            'type' -> 'float'
+        },
+
+        'elasticity' -> {
+            'type' -> 'float'
+        },
+
+        'preset' -> {
+            'type' -> 'term',
+            'options' -> [
+                'ice',
+                'blue_ice'
+            ]
+        }
+    },
+
+    'permissions' -> 0
+};
+
+
+// startup
+
+__on_start() -> (
+    cmd_load();
+);
+
+
+// history
+record_history(type, block, old_value) -> (
+
+    put(global_history, null, [
+        type,
+        block,
+        old_value
+    ]);
+
+    if(
+        length(global_history) > HISTORY_LIMIT,
+
+        delete(global_history, 0)
+    );
+);
+
+
+// help
+
+show_help() -> (
+
+    print(player(), format('bOpenBoatUtils Builder'));
+
+    print(player(),
+        format('g/boatutils bounds <x1> <y1> <z1> <x2> <y2> <z2>')
+    );
+
+    print(player(),
+        format('g/boatutils slipperiness <block> <multiplier>')
+    );
+
+    print(player(),
+        format('g/boatutils slippery <block> <ice|blue_ice>')
+    );
+
+    print(player(),
+        format('g/boatutils booster <block> <force>')
+    );
+
+    print(player(),
+        format('g/boatutils jumppad <block> <force>')
+    );
+
+    print(player(),
+        format('g/boatutils bouncywall <block> <elasticity>')
+    );
+
+    print(player(),
+        format('y/boatutils undo')
+    );
+
+    print(player(),
+        format('a/boatutils save')
+    );
+
+    print(player(),
+        format('a/boatutils load')
+    );
+);
+
+
+// api
+
+set_track_bounds(x1, y1, z1, x2, y2, z2) -> (
+
+    global_min_x = min(x1, x2);
+    global_max_x = max(x1, x2);
+
+    global_min_y = min(y1, y2);
+    global_max_y = max(y1, y2);
+
+    global_min_z = min(z1, z2);
+    global_max_z = max(z1, z2);
+
+    global_has_bounds = true;
+);
+
+
+register_slipperiness(block, multiplier) -> (
+    global_slipperiness:block = multiplier;
+);
+
+
+register_booster(block, force) -> (
+    global_boosters:block = force;
+);
+
+
+register_jump_pad(block, force) -> (
+    global_jump_pads:block = force;
+);
+
+
+register_bouncy_wall(block, elasticity) -> (
+    global_bouncy_walls:block = elasticity;
+);
+
+
+// helpers
+
+inside_bounds(x, y, z) -> (
+
+    global_has_bounds &&
+
+    x >= global_min_x &&
+    x <= global_max_x &&
+
+    y >= global_min_y &&
+    y <= global_max_y &&
+
+    z >= global_min_z &&
+    z <= global_max_z
+);
+
+
+safe_map(map, key) -> (
+
+    value = map:key;
+
+    if(
+        value == null,
+
+        null,
+
+        value
+    )
+);
+// main loop
+
+__on_tick() -> (
+
+    if(!global_has_bounds,
+        return();
+    );
+
+    boats = entity_list('boat');
+
+    if(length(boats) == 0,
+        return();
+    );
+
+    for(boats,
+
+        boat = _;
+
+        pos = pos(boat);
+
+        bx = pos:0;
+        by = pos:1;
+        bz = pos:2;
+
+        if(
+            !inside_bounds(bx, by, bz),
+
+            continue()
+        );
+
+        motion = query(boat, 'motion');
+
+        mx = motion:0;
+        my = motion:1;
+        mz = motion:2;
+
+        speed_sq = mx * mx + mz * mz;
+
+        if(speed_sq < 0.0000001,
+            continue();
+        );
+
+        speed = sqrt(speed_sq);
+
+        yaw = query(boat, 'yaw');
+        rad = radians(yaw);
+
+        // cache blocks
+
+        current_block = type(block(pos));
+
+        under_block_pos = pos + [0,-0.1,0];
+        under_block = type(block(under_block_pos));
+
+        nx = mx / speed * 0.8;
+        nz = mz / speed * 0.8;
+
+        front_pos = pos + [nx,0.2,nz];
+        front_block = type(block(front_pos));
+
+        front_upper_pos = pos + [nx,1.2,nz];
+        front_upper_block = type(block(front_upper_pos));
+
+        // step up blocks
+
+        if(
+            front_block != 'air' &&
+            front_block != 'water' &&
+            front_block != 'lava',
+
+            if(
+                front_upper_block == 'air' ||
+                front_upper_block == 'water',
+
+                modify(
+                    boat,
+                    'pos',
+                    [
+                        bx + (mx / speed * 0.3),
+                        by + 1.05,
+                        bz + (mz / speed * 0.3)
+                    ]
+                );
+
+                my = max(my, 0.07);
+            );
+        );
+
+        // air stepping
+
+        if(
+            current_block == 'air' &&
+            under_block != 'air' &&
+            under_block != 'water',
+
+            mx = mx - sin(rad) * 0.05;
+            mz = mz + cos(rad) * 0.05;
+        );
+
+        // slippery
+        if(
+            (mult = safe_map(global_slipperiness, under_block)) != null,
+
+            mx = mx * mult;
+            mz = mz * mult;
+        );
+
+        // booster
+
+        if(
+            (force = safe_map(global_boosters, under_block)) != null,
+
+            mx = mx - sin(rad) * force;
+            mz = mz + cos(rad) * force;
+        );
+
+        // ------------------------------------
+        // Jump Pad
+        // ------------------------------------
+
+        if(
+            (upforce = safe_map(global_jump_pads, under_block)) != null,
+
+            my = upforce;
+        );
+        // bouncy wall
+
+        wall_offset_x = if(mx >= 0, 0.8, -0.8);
+        wall_offset_z = if(mz >= 0, 0.8, -0.8);
+
+        wall_x = type(block(pos + [wall_offset_x, 0.1, 0]));
+        wall_z = type(block(pos + [0, 0.1, wall_offset_z]));
+        wall_diag = type(block(pos + [
+            wall_offset_x * 0.7,
+            0.1,
+            wall_offset_z * 0.7
+        ]));
+
+        // X reflection
+
+        elasticity = safe_map(global_bouncy_walls, wall_x);
+
+        if(
+            elasticity == null,
+            elasticity = safe_map(global_bouncy_walls, wall_diag)
+        );
+
+        if(elasticity != null,
+            mx = -mx * elasticity;
+        );
+
+        // Z reflection
+
+        elasticity = safe_map(global_bouncy_walls, wall_z);
+
+        if(
+            elasticity == null,
+            elasticity = safe_map(global_bouncy_walls, wall_diag)
+        );
+
+        if(elasticity != null,
+            mz = -mz * elasticity;
+        );
+
+        // clamp small values
+
+        if(abs(mx) < 0.00001,
+            mx = 0;
+        );
+
+        if(abs(mz) < 0.00001,
+            mz = 0;
+        );
+
+        if(abs(my) < 0.00001,
+            my = 0;
+        );
+
+        // modify motion
+
+        modify(
+            boat,
+            'motion',
+            [
+                mx,
+                my,
+                mz
+            ]
+        );
+
+    );
+
+);
+// commands
+
+cmd_bounds(x1, y1, z1, x2, y2, z2) -> (
+
+    record_history(
+        'bounds',
+        null,
+        [
+            global_min_x,
+            global_min_y,
+            global_min_z,
+            global_max_x,
+            global_max_y,
+            global_max_z,
+            global_has_bounds
+        ]
+    );
+
+    set_track_bounds(
+        x1, y1, z1,
+        x2, y2, z2
+    );
+
+    print(
+        player(),
+        format('aTrack bounds updated.')
+    );
+);
+
+
+cmd_slipperiness(block, multiplier) -> (
+
+    record_history(
+        'slipperiness',
+        block,
+        safe_map(global_slipperiness, block)
+    );
+
+    register_slipperiness(
+        block,
+        multiplier
+    );
+
+    print(
+        player(),
+        format(
+            'a' + block +
+            ' slipperiness = ' +
+            multiplier
+        )
+    );
+);
+
+
+cmd_slippery_preset(block, preset) -> (
+
+    multiplier =
+        if(
+            preset == 'blue_ice',
+            0.989,
+            0.98
+        );
+
+    record_history(
+        'slipperiness',
+        block,
+        safe_map(global_slipperiness, block)
+    );
+
+    register_slipperiness(
+        block,
+        multiplier
+    );
+
+    print(
+        player(),
+        format(
+            'a' +
+            block +
+            ' now uses preset "' +
+            preset +
+            '".'
+        )
+    );
+);
+
+
+cmd_booster(block, force) -> (
+
+    record_history(
+        'booster',
+        block,
+        safe_map(global_boosters, block)
+    );
+
+    register_booster(
+        block,
+        force
+    );
+
+    print(
+        player(),
+        format(
+            'aBooster set for ' +
+            block
+        )
+    );
+);
+
+
+cmd_jumppad(block, force) -> (
+
+    record_history(
+        'jumppad',
+        block,
+        safe_map(global_jump_pads, block)
+    );
+
+    register_jump_pad(
+        block,
+        force
+    );
+
+    print(
+        player(),
+        format(
+            'aJump pad set for ' +
+            block
+        )
+    );
+);
+
+
+cmd_bouncywall(block, elasticity) -> (
+
+    record_history(
+        'bouncywall',
+        block,
+        safe_map(global_bouncy_walls, block)
+    );
+
+    register_bouncy_wall(
+        block,
+        elasticity
+    );
+
+    print(
+        player(),
+        format(
+            'aBouncy wall set for ' +
+            block
+        )
+    );
+);
+
+
+// undo
+
+cmd_undo() -> (
+
+    if(
+        length(global_history) == 0,
+
+        print(
+            player(),
+            format('cNothing to undo.')
+        );
+
+        return();
+    );
+
+    action =
+        delete(
+            global_history,
+            length(global_history) - 1
+        );
+
+    type = action:0;
+    block = action:1;
+    old = action:2;
+
+    if(
+
+        type == 'bounds',
+
+        (
+            global_min_x = old:0;
+            global_min_y = old:1;
+            global_min_z = old:2;
+
+            global_max_x = old:3;
+            global_max_y = old:4;
+            global_max_z = old:5;
+
+            global_has_bounds = old:6;
+
+            print(
+                player(),
+                format('eBounds restored.')
+            );
+        ),
+
+        type == 'slipperiness',
+
+        (
+            if(
+                old == null,
+                delete(global_slipperiness, block),
+                global_slipperiness:block = old
+            );
+
+            print(
+                player(),
+                format(
+                    'eUndid slipperiness.'
+                )
+            );
+        ),
+
+        type == 'booster',
+
+        (
+            if(
+                old == null,
+                delete(global_boosters, block),
+                global_boosters:block = old
+            );
+
+            print(
+                player(),
+                format(
+                    'eUndid booster.'
+                )
+            );
+        ),
+
+        type == 'jumppad',
+
+        (
+            if(
+                old == null,
+                delete(global_jump_pads, block),
+                global_jump_pads:block = old
+            );
+
+            print(
+                player(),
+                format(
+                    'eUndid jump pad.'
+                )
+            );
+        ),
+
+        type == 'bouncywall',
+
+        (
+            if(
+                old == null,
+                delete(global_bouncy_walls, block),
+                global_bouncy_walls:block = old
+            );
+
+            print(
+                player(),
+                format(
+                    'eUndid bouncy wall.'
+                )
+            );
+        )
+    );
+);
+// save/load
+
+cmd_save() -> (
+
+    package = {
+
+        'bounds' -> [
+            global_min_x,
+            global_min_y,
+            global_min_z,
+            global_max_x,
+            global_max_y,
+            global_max_z,
+            global_has_bounds
+        ],
+
+        'slipperiness' -> global_slipperiness,
+
+        'boosters' -> global_boosters,
+
+        'jump_pads' -> global_jump_pads,
+
+        'bouncy_walls' -> global_bouncy_walls
+
+    };
+
+    write_file(
+        global_file_name,
+        'json',
+        package
+    );
+
+    print(
+        player(),
+        format('aConfiguration saved successfully.')
+    );
+);
+
+
+cmd_load() -> (
+
+    package = read_file(
+        global_file_name,
+        'json'
+    );
+
+    if(
+        package == null,
+
+        (
+            logger(
+                'info',
+                'OpenBoatUtils: no save file found.'
+            );
+
+          
