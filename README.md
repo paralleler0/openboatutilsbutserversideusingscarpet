@@ -10,5 +10,5 @@ idk why i did this\
 /boatutils save\
 /boatutils load\
 /boatutils (help)\
-change SUB_TICKS if you get rubber banding\
+change SUB_TICKS if you get rubber banding \
 DO NOT USE THIS ON BEDROCK
