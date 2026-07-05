@@ -11,6 +11,9 @@ global_history = [];
 global_file_name = 'boatutils_config';
 HISTORY_LIMIT = 20;
 
+SUB_TICKS = 4; 
+SUB_STEP_FACTOR = 1.0 / SUB_TICKS;
+
 // commands
 __config() -> {
     'commands' -> {
@@ -85,89 +88,98 @@ __on_tick() -> (
     if(!global_has_bounds, return());
     boats = entity_list('boat');
     if(!boats, return());
-
+    
     for(boats, boat = _;
         pos = pos(boat);
         bx = pos:0; by = pos:1; bz = pos:2;
-        
         if(!inside_bounds(bx, by, bz), continue());
-
+        
         motion = query(boat, 'motion');
         mx = motion:0; my = motion:1; mz = motion:2;
-        speed_sq = mx * mx + mz * mz;
         
-        if(speed_sq < 0.0000001, continue());
-
-        yaw = query(boat, 'yaw');
-        rad = radians(yaw);
-        sin_rad = sin(rad);
-        cos_rad = cos(rad);
-
-        // Fetch block entities and extract type string inline
-        current_block = str(block(pos));
-        under_block = str(block(bx, by - 0.1, bz));
-
-        // Predictive step-up checks using pure math vectors
-        speed = sqrt(speed_sq);
-        inv_speed = 1.0 / speed;
-        nx = mx * inv_speed * 0.8;
-        nz = mz * inv_speed * 0.8;
-        
-        front_block = str(block(bx + nx, by + 0.2, bz + nz));
-        front_upper_block = str(block(bx + nx, by + 1.2, bz + nz));
-
-        // step up blocks
-        if(front_block != 'air' && front_block != 'water' && front_block != 'lava',
-            if(front_upper_block == 'air' || front_upper_block == 'water',
-                modify(boat, 'pos', [bx + (mx * inv_speed * 0.3), by + 1.05, bz + (mz * inv_speed * 0.3)]);
-                my = max(my, 0.07);
+        // sub ticks loop
+        loop(SUB_TICKS,
+            speed_sq = mx * mx + mz * mz;
+            if(speed_sq < 0.0000001, continue());
+            
+            yaw = query(boat, 'yaw');
+            rad = radians(yaw);
+            sin_rad = sin(rad);
+            cos_rad = cos(rad);
+            
+            current_block = str(block(bx, by, bz));
+            under_block = str(block(bx, by - 0.1, bz));
+            
+            speed = sqrt(speed_sq);
+            inv_speed = 1.0 / speed;
+            nx = mx * inv_speed * 0.8;
+            nz = mz * inv_speed * 0.8;
+            
+            front_block = str(block(bx + nx, by + 0.2, bz + nz));
+            front_upper_block = str(block(bx + nx, by + 1.2, bz + nz));
+            
+            // step up blocks
+            if(front_block != 'air' && front_block != 'water' && front_block != 'lava',
+                if(front_upper_block == 'air' || front_upper_block == 'water',
+                    bx = bx + (mx * inv_speed * 0.3 * SUB_STEP_FACTOR);
+                    by = by + (1.05 * SUB_STEP_FACTOR);
+                    bz = bz + (mz * inv_speed * 0.3 * SUB_STEP_FACTOR);
+                    modify(boat, 'pos', [bx, by, bz]);
+                    my = max(my, 0.07);
+                );
             );
+            
+            // air stepping
+            if(current_block == 'air' && under_block != 'air' && under_block != 'water',
+                mx = mx - sin_rad * 0.05 * SUB_STEP_FACTOR;
+                mz = mz + cos_rad * 0.05 * SUB_STEP_FACTOR;
+            );
+            
+            // slippery multiplier scaled exponentially for sub-ticks
+            if((mult = global_slipperiness:under_block) != null,
+                mx = mx * (mult ^ SUB_STEP_FACTOR);
+                mz = mz * (mult ^ SUB_STEP_FACTOR);
+            );
+            
+            // booster force divided equally across sub-steps
+            if((force = global_boosters:under_block) != null,
+                mx = mx - sin_rad * force * SUB_STEP_FACTOR;
+                mz = mz + cos_rad * force * SUB_STEP_FACTOR;
+            );
+            
+            // jump pad
+            if((upforce = global_jump_pads:under_block) != null,
+                my = upforce;
+            );
+            
+            // bouncy wall vectors
+            wall_offset_x = if(mx >= 0, 0.8, -0.8);
+            wall_offset_z = if(mz >= 0, 0.8, -0.8);
+            wall_x = str(block(bx + wall_offset_x, by + 0.1, bz));
+            wall_z = str(block(bx, by + 0.1, bz + wall_offset_z));
+            wall_diag = str(block(bx + (wall_offset_x * 0.7), by + 0.1, bz + (wall_offset_z * 0.7)));
+            
+            // X reflection
+            if((elasticity = global_bouncy_walls:wall_x) == null, elasticity = global_bouncy_walls:wall_diag);
+            if(elasticity != null, mx = -mx * elasticity);
+            
+            // Z reflection
+            if((elasticity = global_bouncy_walls:wall_z) == null, elasticity = global_bouncy_walls:wall_diag);
+            if(elasticity != null, mz = -mz * elasticity);
+            
+            // Clamp small values
+            if(abs(mx) < 0.00001, mx = 0);
+            if(abs(mz) < 0.00001, mz = 0);
+            if(abs(my) < 0.00001, my = 0);
+            
+            // i move the boat position so the next loop cycle detects blocks accurately
+            bx = bx + (mx * SUB_STEP_FACTOR);
+            by = by + (my * SUB_STEP_FACTOR);
+            bz = bz + (mz * SUB_STEP_FACTOR);
+            modify(boat, 'pos', [bx, by, bz]);
         );
-
-        // air stepping
-        if(current_block == 'air' && under_block != 'air' && under_block != 'water',
-            mx = mx - sin_rad * 0.05;
-            mz = mz + cos_rad * 0.05;
-        );
-
-        // slippery
-        if((mult = global_slipperiness:under_block) != null,
-            mx = mx * mult;
-            mz = mz * mult;
-        );
-
-        // booster
-        if((force = global_boosters:under_block) != null,
-            mx = mx - sin_rad * force;
-            mz = mz + cos_rad * force;
-        );
-
-        // jump pad
-        if((upforce = global_jump_pads:under_block) != null,
-            my = upforce;
-        );
-
-        // bouncy wall vectors
-        wall_offset_x = if(mx >= 0, 0.8, -0.8);
-        wall_offset_z = if(mz >= 0, 0.8, -0.8);
         
-        wall_x = str(block(bx + wall_offset_x, by + 0.1, bz));
-        wall_z = str(block(bx, by + 0.1, bz + wall_offset_z));
-        wall_diag = str(block(bx + (wall_offset_x * 0.7), by + 0.1, bz + (wall_offset_z * 0.7)));
-
-        // X reflection
-        if((elasticity = global_bouncy_walls:wall_x) == null, elasticity = global_bouncy_walls:wall_diag);
-        if(elasticity != null, mx = -mx * elasticity);
-
-        // Z reflection
-        if((elasticity = global_bouncy_walls:wall_z) == null, elasticity = global_bouncy_walls:wall_diag);
-        if(elasticity != null, mz = -mz * elasticity);
-
-        // clamp small values
-        if(abs(mx) < 0.00001, mx = 0);
-        if(abs(mz) < 0.00001, mz = 0);
-        if(abs(my) < 0.00001, my = 0);
-
+        // send back final movement vector to the vanilla entity
         modify(boat, 'motion', [mx, my, mz]);
     );
 );
