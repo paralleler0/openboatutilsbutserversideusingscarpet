@@ -11,4 +11,5 @@ idk why i did this\
 /boatutils load\
 /boatutils (help)\
 change SUB_TICKS if you get rubber banding \
-DO NOT USE THIS ON BEDROCK
+DO NOT USE THIS ON BEDROCK \
+no this is not written in scala
